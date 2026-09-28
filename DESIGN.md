@@ -1,93 +1,90 @@
-# netdbscan — design
+# net-dbscan design
 
-## Core invariant
+## Purpose
 
-```text
-points
-  → boundary filter
-  → snap to supplied network
-  → sparse road-distance neighbourhoods
-  → scikit-learn DBSCAN
-  → grouped points
-```
+`net-dbscan` implements ordinary DBSCAN on geospatial point observations when neighbourhood distance is shortest-path distance along a supplied spatial network.
 
+The package is standalone. Its runtime stack is GeoPandas/Shapely for spatial data and geometry, SciPy for sparse graph operations and bounded shortest paths, and scikit-learn for DBSCAN.
 
-## Input formats
-
-GeoParquet is the canonical/recommended interchange format. GeoPackage and
-Shapefile are accepted as input formats. A one-layer GeoPackage is read
-automatically; when a GeoPackage contains multiple layers, the caller must
-select the layer explicitly rather than relying on implicit layer order.
-
-## Boundary
-
-The boundary filters eligible observations. Points on the polygon boundary are retained. The line network is not clipped by the polygon.
-
-## CRS
-
-The network CRS is the analysis CRS and must be projected. Points and boundary may use any valid CRS and are reprojected to the network CRS. Every distance parameter is expressed in the network CRS linear units.
-
-## Road topology
-
-`netdbscan` accepts the topology represented by the supplied line data. It does not infer uncertain connections or silently repair topology. `MultiLineString` inputs are exploded before network construction to avoid false links between separate parts.
-
-PySAL `spaghetti` builds the network and snaps observations. Exact endpoints are canonicalized to network vertices; interior positions on different arcs are not merged merely because their XY coordinates coincide.
-
-## DBSCAN metric
-
-If observation `i` snaps to network position `s_i`, then
+## Pipeline
 
 ```text
-d_R(i,j) = shortest-path distance along the network from s_i to s_j.
+input points + optional boundary + projected line network
+  → validate/reproject
+  → construct deterministic network graph
+  → snap eligible points to network arcs
+  → collapse identical snapped positions with multiplicity
+  → materialise only position pairs with network distance <= eps
+  → scikit-learn DBSCAN with sample weights
+  → expand labels/diagnostics back to observations
 ```
 
-Snap distance from the original observation to `s_i` is QA metadata, not part of `d_R`.
+The boundary filters observations only. It never clips the network, so shortest paths may leave and re-enter the boundary.
 
-The implementation computes only pairs satisfying
+## Network topology
 
-```text
-d_R(i,j) <= eps
-```
+Every LineString is split at its existing vertices. MultiLineStrings are treated as separate parts. Vertices are canonicalized by coordinate after optional significant-digit rounding (`vertex_digits=11` by default).
 
-and stores them in a sparse precomputed distance matrix. Disconnected pairs are absent. scikit-learn performs DBSCAN; this package does not reimplement DBSCAN.
+Two arcs connect only through a shared canonical vertex. Geometric crossings without a shared vertex are not noded automatically.
 
-## Repeated snapped positions
+Arcs are undirected and weighted by their geometric length in the projected network CRS. Directed routing, turn restrictions, and non-length impedance are outside the current scope.
 
-Several observations at one exact network position have identical distances to every other observation. They are represented once during the network search. DBSCAN receives the position with `sample_weight` equal to its multiplicity, which preserves `min_samples` semantics without materializing O(k²) zero-distance pairs.
+## Snapping
+
+Points are snapped to the nearest point of the nearest canonical arc using a Shapely STRtree. When several arcs are exactly equally near, the smallest canonical arc index is selected. This makes snapping invariant to network-row order.
+
+The straight-line snap distance is QA metadata and is not included in DBSCAN distance.
+
+## Position compression
+
+Observations at exactly the same snapped network position are represented by one position with integer multiplicity. Vertex positions reached through different incident arcs are one position; coincident interior points on different arcs remain distinct because the arcs may cross without connecting.
+
+Position numbering depends on canonical network location, not input row order or point IDs.
+
+## Neighbour graph
+
+DBSCAN needs only pairs with distance at most `eps`. The neighbour engine therefore searches bounded local subgraphs rather than constructing an all-pairs matrix.
+
+For each snapped position, shortest paths can leave through either endpoint of its containing arc. Spatial batching restricts SciPy Dijkstra searches to network vertices that can possibly participate in paths of length `<= eps`. Direct same-arc distances are handled explicitly and merged with paths through vertices.
+
+Candidate arrays and same-arc batches have hard internal bounds. `max_neighbor_pairs` provides a second, user-visible safety limit on the total stored unordered pairs.
+
+The returned sparse radius graph is symmetric and omits the diagonal. The DBSCAN layer adds explicit zero self-distances before passing the graph to scikit-learn.
+
+## DBSCAN semantics
+
+`eps` is both the model neighbourhood radius and the shortest-path search radius. It is never adapted automatically.
+
+Multiplicity at a compressed position is passed as scikit-learn `sample_weight`, preserving observation-level `min_samples` semantics.
+
+The lower-level DBSCAN API validates externally supplied sparse radius graphs, including shape, finite/nonnegative distances, radius compliance, duplicate entries, zero diagonal, and symmetry.
+
+## Core, border, and noise
+
+Core status is intrinsic to the radius graph and multiplicities. A border position is non-core but lies within `eps` of at least one core cluster. This classification is stored separately from the final assignment policy.
+
+`border_policy` supports:
+
+- `expansion`: standard DBSCAN expansion;
+- `nearest_core`: assign to the nearest reachable core cluster;
+- `core_only`: leave all border positions as noise (DBSCAN*).
+
+Thus under `core_only`, an observation may simultaneously have `is_border=True` and `is_noise=True`.
 
 ## Determinism
 
-`point_id` is required, unique, non-null and unique after string conversion. Points are clustered in canonical stringified-ID order. Cluster IDs are assigned as `C000001`, `C000002`, ... in order of each cluster's smallest member key.
+Network vertices and arcs are canonicalized by geometry. Nearest-arc ties use canonical arc order. Distinct positions are numbered by network location. These choices make the computational clustering invariant to input network-row order, point-row order, and point-ID renaming, apart from the human-readable public cluster IDs.
 
-## Noise
+Public IDs (`C000001`, ...) are numbered after sorting observations by point ID text. Renaming IDs may therefore rename clusters without changing the partition.
 
-Default `noise_policy="exclude"` does not remove DBSCAN noise from the output. Noise receives `cluster_id = null` and `is_noise = true`.
+## Grouped processing
 
-With `noise_policy="singleton"`, each noise observation gets its own one-point cluster while retaining `is_noise = true`.
+Grouped runs build the graph and snap eligible points once, then cluster each group independently. Null and blank groups use internal sentinel values that cannot collide with literal strings such as `"__null__"` and `"__blank__"`.
 
-## Output
+Output filename collisions are checked with case-folded names before any group files are written, protecting case-insensitive filesystems such as typical Windows installations.
 
-One GeoParquet point layer containing only boundary-covered input observations, preserving original attributes and adding:
+## File I/O
 
-```text
-cluster_id
-is_noise
-is_core
-snap_distance
-snapped_x
-snapped_y
-```
+PyArrow is optional because the in-memory API does not require it. File-based clustering always writes Parquet, so those entry points check for PyArrow before reading inputs or doing expensive graph work.
 
-The primary geometry remains the original observation location, reprojected to the network CRS.
-
-## Non-goals
-
-`netdbscan` does not:
-
-- construct a road network from OpenStreetMap or another external service;
-- clip the network to the boundary;
-- add point-to-network access distance to DBSCAN distance;
-- calculate centroids, Voronoi regions, service areas or downstream partitions;
-- infer domain meaning from observations;
-- implement alternate clustering methods;
-- repair uncertain network topology.
+The manifest records input paths and selected layers, package/configuration data, `vertex_digits`, CRS and linear unit, graph counts, and backend versions.

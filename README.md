@@ -1,147 +1,209 @@
-# netdbscan
+# net-dbscan
 
-`netdbscan` clusters point observations with DBSCAN using **shortest-path distance along a supplied line network** rather than Euclidean distance.
-
-The pipeline is deliberately small:
+`net-dbscan` clusters geospatial point observations with **DBSCAN using shortest-path distance on a supplied spatial network** rather than Euclidean distance.
 
 ```text
-point layer
-    ↓
-filter to polygon boundary
-    ↓
-snap retained points to the line network
-    ↓
-find sparse road-network neighbours within eps
-    ↓
+points
+  ↓
+optional boundary eligibility
+  ↓
+projected spatial network
+  ↓
+Shapely/SciPy graph construction + deterministic snapping
+  ↓
+sparse shortest-path neighbourhoods within eps
+  ↓
 scikit-learn DBSCAN
-    ↓
-grouped point layer
+  ↓
+clustered points + cluster table + diagnostics
 ```
 
-The network is **not clipped** by the boundary. The boundary controls point eligibility only. A shortest path between two retained points may therefore leave the polygon when the supplied network does so.
+The package is standalone. It does not depend on another clustering package or on PySAL `spaghetti` at runtime.
 
-## Input formats
+## Installation
 
-**GeoParquet is the recommended format** for points, boundary and network. GeoPackage and Shapefile are accepted for interoperability.
+From the repository:
 
-GeoParquet is the better default for a Python workflow because it preserves modern column types and CRS metadata and avoids classic Shapefile restrictions such as 10-character field names, weak null handling and legacy text encoding. GeoPackage is a good choice when a GIS workflow benefits from a single portable container or named layers. The output is always GeoParquet.
+```powershell
+python -m pip install -e ".[dev]"
+```
 
-Inputs:
+The distribution name is `net-dbscan`, the import package is `net_dbscan`, and the command is `net-dbscan`.
 
-- **points** — `Point` geometries with a unique `point_id` column (configurable);
-- **boundary** — `Polygon` or `MultiPolygon` geometries;
-- **network** — `LineString` or `MultiLineString` geometries in a **projected CRS**.
+Core dependencies are GeoPandas, NumPy, pandas, Pyogrio, SciPy, scikit-learn, and Shapely. Optional extras are:
 
-The network CRS is the analysis CRS. Points and boundary are reprojected to it. `eps` and `max_snap_distance` use that CRS's linear units; the package does not assume metres.
-
-## Output
-
-The output contains only points covered by the boundary, including points exactly on the boundary. All original point attributes are preserved. The following fields are appended:
-
-| field | meaning |
-|---|---|
-| `cluster_id` | stable public cluster ID (`C000001`, ...); null for excluded DBSCAN noise |
-| `is_noise` | whether scikit-learn DBSCAN labelled the point noise |
-| `is_core` | DBSCAN core-point flag |
-| `snap_distance` | straight-line distance from the original point to the network |
-| `snapped_x` | x coordinate of the snapped network position |
-| `snapped_y` | y coordinate of the snapped network position |
-
-By default, noise remains in the output with `cluster_id = null`. With `noise_policy="singleton"`, each noise point gets its own cluster ID while `is_noise` remains true.
+- `files`: PyArrow for GeoParquet/Parquet I/O;
+- `cli`: PyArrow + Typer for the command-line interface;
+- `dev`: PyArrow + Typer + pytest;
+- `reference`: optional `spaghetti` 1.x only for historical/reference parity work. It is not imported by the runtime.
 
 ## CLI
 
-```powershell
-netdbscan run `
-  --points "data\points.parquet" `
-  --boundary "data\boundary.parquet" `
-  --network "data\roads.parquet" `
-  --point-id-col "point_id" `
-  --eps 1000 `
-  --min-samples 5 `
-  --output "output\clustered_points.parquet"
-```
-
-GeoPackage inputs work directly. A one-layer GeoPackage needs no extra option:
+Single run:
 
 ```powershell
-netdbscan run `
+net-dbscan cluster `
   --points "data\points.parquet" `
   --boundary "data\boundary.gpkg" `
+  --boundary-layer boundary `
   --network "data\roads.gpkg" `
+  --network-layer roads `
+  --point-id-col canonical_id `
   --eps 1000 `
-  --output "output\clustered_points.parquet"
+  --min-samples 5 `
+  --output-dir "output\dbscan"
 ```
 
-For a multi-layer GeoPackage, specify the layer explicitly with `--points-layer`,
-`--boundary-layer`, or `--network-layer`. Shapefile inputs also work.
-
-Use `--max-snap-distance` to refuse observations that are implausibly far from the supplied network, and `--max-neighbor-pairs` to cap sparse-neighbour memory use.
-
-
-### Batch by a point-layer column
-
-To run DBSCAN independently for every unique value of a column, use `batch`:
+Grouped run:
 
 ```powershell
-netdbscan batch `
+net-dbscan cluster `
   --points "data\points.parquet" `
   --boundary "data\boundary.gpkg" `
+  --boundary-layer boundary `
   --network "data\roads.gpkg" `
-  --group-col "io16_map_code" `
-  --point-id-col "canonical_id" `
-  --eps 100 `
+  --network-layer roads `
+  --point-id-col canonical_id `
+  --group-col io80_map_code `
+  --group-universe "data\io80_universe.csv" `
+  --missing-group-policy exclude `
+  --eps 500 `
   --min-samples 5 `
-  --output-dir "output\io16"
+  --output-dir "output\dbscan_io80"
 ```
 
-Each unique value is clustered independently and written as one GeoParquet
-file, for example `group_03.parquet`. Null values are written to
-`group___null__.parquet` and blank strings to `group___blank__.parquet`.
-Cluster IDs restart within each group.
+`--vertex-digits` controls the significant-digit rounding used to identify shared network vertices. The default is `11`; this makes graph construction deterministic while tolerating tiny coordinate noise. Set `vertex_digits=None` only through the Python API when exact coordinate identity is required.
 
-## Python API
+## DBSCAN parameters
 
-```python
-import geopandas as gpd
-from netdbscan import NetDBSCANConfig, cluster_geodataframes
+`eps` is the DBSCAN neighbourhood radius in the linear units of the projected network CRS. It is also the exact maximum network distance searched by the sparse neighbour engine. Changing `eps` changes the DBSCAN model; it is not an adaptive computational horizon.
 
-points = gpd.read_parquet("points.parquet")
-boundary = gpd.read_parquet("boundary.parquet")
-network = gpd.read_parquet("roads.parquet")
+`min_samples` counts observations, including multiplicity when several observations snap to the same network position.
 
-clustered = cluster_geodataframes(
-    points=points,
-    boundary=boundary,
-    network=network,
-    point_id_col="point_id",
-    config=NetDBSCANConfig(eps=1000, min_samples=5),
-)
-```
+`border_policy` controls only non-core observations that lie within `eps` of a core cluster:
 
-## Distance definition
+- `expansion` — standard scikit-learn DBSCAN expansion order;
+- `nearest_core` — assign each border observation to the cluster of its nearest core position by network distance;
+- `core_only` — leave every border observation unassigned/noise (DBSCAN*).
 
-For observations `i` and `j`, let `s_i` and `s_j` be their snapped positions on the network. The DBSCAN metric is
+Core status and the connected components of core positions are identical under all three policies.
+
+## Network semantics
+
+Each LineString is split into straight arcs between consecutive vertices. MultiLineStrings are exploded into independent parts before graph construction.
+
+Two network features connect **only when they share a vertex after `vertex_digits` rounding**. A geometric crossing without a shared vertex remains disconnected, which is appropriate for cases such as a bridge crossing another road.
+
+Every observation is snapped to the nearest point on the nearest arc. Ties between equally near arcs are broken by canonical arc order, so snapping is deterministic under network-row reordering.
+
+For observations `i` and `j`, with snapped positions `s_i` and `s_j`, the clustering metric is
 
 ```text
 d(i, j) = shortest network distance from s_i to s_j.
 ```
 
-Point-to-network snap distance is **not** added to this metric. It is reported separately as QA metadata. Points on disconnected network components can never be DBSCAN neighbours.
+Point-to-network snap distance is not added to the clustering metric. It is retained as QA metadata. Observations on disconnected network components are never neighbours.
 
-The neighbour search is sparse: the implementation discovers only pairs with network distance `<= eps`, then passes that sparse precomputed relation to scikit-learn's standard DBSCAN implementation. Observations at exactly the same snapped position are compressed to one weighted position for DBSCAN and expanded back to the original observations afterwards.
+## Sparse neighbour search
 
-## Determinism
+The package does not build an all-pairs distance matrix. It searches only network paths that can produce position pairs within `eps`, using spatially local SciPy shortest-path batches and hard-bounded candidate chunks.
 
-Observations are sorted by the string representation of `point_id` before clustering. Public cluster IDs are then numbered by each cluster's smallest member key. This makes public labels stable under input row permutation. As in standard DBSCAN, an ambiguous border point reachable from two clusters follows expansion order; here that order is deterministic because it is tied to `point_id` ordering.
+`max_neighbor_pairs` is a safety limit on stored unordered pairs. The default is 10,000,000. If a run exceeds it, the package stops with a contextual error instead of allowing an uncontrolled allocation.
 
-## Prior art
+Repeated observations at exactly the same snapped network position are compressed into one position with integer multiplicity and passed to scikit-learn as `sample_weight`. This preserves ordinary DBSCAN `min_samples` semantics without materialising duplicate zero-distance pairs.
 
-Network-constrained DBSCAN is not a new clustering algorithm. Relevant precedents include Geoff Boeing's `network-clustering` example and the NS-DBSCAN literature. `netdbscan` focuses on a reusable Python implementation that keeps observations at continuous positions along network arcs, avoids a dense all-pairs road-distance matrix, and delegates DBSCAN itself to scikit-learn.
+## Grouped runs
 
-- https://github.com/gboeing/network-clustering
-- Geoff Boeing (2018), *Network-Based Spatial Clustering* (blog + open GitHub example).
-- Wang, Ren, Luo & Tian (2019), *NS-DBSCAN: A Density-Based Clustering Algorithm in Network Space*, ISPRS International Journal of Geo-Information 8(5):218.
+With `--group-col`, groups are clustered independently while the network is prepared once and eligible points are snapped once.
+
+Null and blank groups are excluded by default. Use `--missing-group-policy include` to treat them as explicit groups or `error` to stop the run.
+
+`--group-universe` accepts a one-column CSV of expected non-missing categories. Declared-but-absent groups still receive zero-row outputs. Observed groups outside the universe are processed and flagged.
+
+`--group-params` accepts `eps`, `min_samples`, `noise_policy`, and `border_policy` overrides. Example:
+
+```text
+io80_map_code,eps,min_samples,border_policy
+31,5000,5,expansion
+55,1500,5,nearest_core
+63,1500,5,
+```
+
+The reserved spellings `__null__` and `__blank__` target actual missing groups in parameter files. To target a literal string with one of those names, use `literal:__null__` or `literal:__blank__`.
+
+## Outputs
+
+A single run writes:
+
+```text
+clustered_points.parquet
+cluster_table.parquet
+summary.csv
+manifest.json
+```
+
+A grouped run writes:
+
+```text
+points/group_<value>.parquet
+clusters/group_<value>.parquet
+summary.csv
+manifest.json
+```
+
+Point output preserves the input fields and adds:
+
+| field | meaning |
+|---|---|
+| `cluster_id` | stable public ID (`C000001`, ...); null for noise unless singleton IDs are requested |
+| `is_noise` | whether the final selected border policy leaves the observation unassigned |
+| `is_core` | whether the snapped position satisfies the DBSCAN core criterion |
+| `is_border` | intrinsic DBSCAN border status: non-core but within `eps` of at least one core cluster |
+| `n_candidate_clusters` | number of core clusters within `eps`; values `>=2` identify contested border observations |
+| `snap_distance` | straight-line distance from the original point to its snapped network position |
+| `snapped_x`, `snapped_y` | snapped coordinates in the network CRS |
+
+`is_border` is independent of assignment policy. Under `core_only`, for example, a point can have `is_border=True` and `is_noise=True`.
+
+`cluster_table.parquet` contains one row per assigned DBSCAN cluster with point, position, core, and assigned-border counts. Noise singleton IDs created by `noise_policy="singleton"` are downstream labels, not DBSCAN clusters, and are not included in this table.
+
+`summary.csv` records point/position counts, neighbour-pair counts, network-component and snapping diagnostics, cluster/noise/core/intrinsic-border shares, `contested_share`, parameters, group metadata, and runtime.
+
+`manifest.json` records input files and selected layers, package version, parameters, `vertex_digits`, CRS and distance unit, graph size, and the Shapely/SciPy/scikit-learn backend versions.
+
+## Python API
+
+```python
+import geopandas as gpd
+from net_dbscan import DBSCANConfig, cluster_geodataframes
+
+out = cluster_geodataframes(
+    points=gpd.read_parquet("points.parquet"),
+    boundary=gpd.read_file("boundary.gpkg"),  # or None
+    network=gpd.read_file("roads.gpkg"),
+    config=DBSCANConfig(eps=500, min_samples=5),
+    point_id_col="canonical_id",
+)
+
+out.points
+out.clusters
+out.summary
+out.analysis
+```
+
+Lower-level public functions include `build_network_graph`, `snap_points`, `distinct_positions`, `neighbor_graph`, and `dbscan`. `RoadGraph`, `build_road_graph`, and `NetDBSCANConfig` remain compatibility aliases for earlier releases; new code should use the generic names.
+
+## Validation and determinism
+
+The lower-level `dbscan()` API validates sparse distance graphs before clustering. It rejects malformed shape, negative/non-finite values, distances beyond `eps`, duplicate stored entries, nonzero stored self-distances, and asymmetric relations unless symmetry checking is explicitly skipped for a graph known to be symmetric by construction.
+
+Network vertices and arcs are canonicalized by geometry, nearest-arc ties are deterministic, and distinct snapped positions are numbered from network location rather than input row order or point IDs. Public cluster IDs are then numbered from canonical point-ID order. Renaming IDs can therefore change which component is called `C000001`, but not the underlying partition.
+
+Grouped output filenames are preflighted case-insensitively so values such as `A` and `a` cannot overwrite one another on Windows.
+
+## Scope
+
+`net-dbscan` does not download networks, repair uncertain topology, infer intersections that are absent from the source geometry, choose the scientifically appropriate `eps`, or construct service/Voronoi territories.
 
 ## License
 
