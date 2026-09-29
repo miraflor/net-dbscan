@@ -268,7 +268,7 @@ Here E is closer than D, so I moves to the upper cluster.</p>
 
 <figure class="tutorial-figure">
   <img src="assets/tutorial/07_policy_nearest_core.svg" alt="Nearest-core assignment sends the contested border point to the upper cluster.">
-  <figcaption>Figure 7. I joins the upper cluster because 1.25 < 1.30.</figcaption>
+  <figcaption>Figure 7. I joins the upper cluster because 1.25 &lt; 1.30.</figcaption>
 </figure>
 
 
@@ -353,7 +353,6 @@ M_\varepsilon(i) \ge \texttt{min_samples}.
 
 out = cluster_geodataframes(
     points=points,
-    boundary=boundary,   # may be None
     network=network,
     config=DBSCANConfig(
         eps=500,

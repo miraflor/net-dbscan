@@ -9,17 +9,17 @@ The package is standalone. Its runtime stack is GeoPandas/Shapely for spatial da
 ## Pipeline
 
 ```text
-input points + optional boundary + projected line network
+input points + projected line network
   → validate/reproject
   → construct deterministic network graph
-  → snap eligible points to network arcs
+  → snap points to network arcs
   → collapse identical snapped positions with multiplicity
   → materialise only position pairs with network distance <= eps
   → scikit-learn DBSCAN with sample weights
   → expand labels/diagnostics back to observations
 ```
 
-The boundary filters observations only. It never clips the network, so shortest paths may leave and re-enter the boundary.
+The clustering package does not define a study-area boundary. Callers that need geographic eligibility filtering should filter the input points before calling `net-dbscan`.
 
 ## Network topology
 
@@ -79,7 +79,7 @@ Public IDs (`C000001`, ...) are numbered after sorting observations by point ID 
 
 ## Grouped processing
 
-Grouped runs build the graph and snap eligible points once, then cluster each group independently. Null and blank groups use internal sentinel values that cannot collide with literal strings such as `"__null__"` and `"__blank__"`.
+Grouped runs build the graph and snap the retained points once, then cluster each group independently. Null and blank groups use internal sentinel values that cannot collide with literal strings such as `"__null__"` and `"__blank__"`.
 
 Output filename collisions are checked with case-folded names before any group files are written, protecting case-insensitive filesystems such as typical Windows installations.
 

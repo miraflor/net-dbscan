@@ -14,7 +14,7 @@ from scipy.sparse import coo_matrix, csr_matrix
 from scipy.sparse.csgraph import dijkstra
 
 import net_dbscan
-from conftest import contested_motifs, grid_roads, square_boundary, touching_blobs
+from conftest import contested_motifs, grid_roads, touching_blobs
 from net_dbscan import DBSCANConfig, cluster_files, cluster_geodataframes
 from net_dbscan.network import build_network_graph, distinct_positions, neighbor_graph, snap_points
 from net_dbscan.sparse_dbscan import dbscan
@@ -72,7 +72,7 @@ def test_invalid_border_policy():
 
 
 def run(points, roads, config=CONFIG):
-    return cluster_geodataframes(points, square_boundary(), roads, config)
+    return cluster_geodataframes(points, roads, config)
 
 
 MOTIF_CONFIG = DBSCANConfig(eps=40, min_samples=4)
@@ -183,10 +183,10 @@ def test_old_names_are_aliases():
     assert net_dbscan.NetDBSCANConfig is net_dbscan.DBSCANConfig
 
 
-def test_boundary_is_optional_and_cluster_table_file(tmp_path):
+def test_cluster_table_file_and_all_points_are_used(tmp_path):
     roads, points = grid_roads(jitter=8.0), touching_blobs()
-    without = cluster_geodataframes(points, None, roads, CONFIG)
-    assert without.summary["n_points"] == len(points)
+    out = cluster_geodataframes(points, roads, CONFIG)
+    assert out.summary["n_points"] == len(points)
     pytest.importorskip("pyarrow")
     points.to_parquet(tmp_path / "p.parquet")
     roads.to_parquet(tmp_path / "r.parquet")
@@ -224,8 +224,7 @@ def test_command_line_end_to_end(tmp_path):
     roads, points = grid_roads(jitter=8.0), touching_blobs()
     points.to_parquet(tmp_path / "p.parquet")
     roads.to_parquet(tmp_path / "r.parquet")
-    square_boundary().to_parquet(tmp_path / "b.parquet")
-    args = ["cluster", "--points", str(tmp_path / "p.parquet"), "--network", str(tmp_path / "r.parquet"), "--boundary", str(tmp_path / "b.parquet"),
+    args = ["cluster", "--points", str(tmp_path / "p.parquet"), "--network", str(tmp_path / "r.parquet"),
             "--output-dir", str(tmp_path / "out"), "--eps", "60", "--min-samples", "6", "--border-policy", "nearest_core"]
     result = CliRunner().invoke(app, args)
     assert result.exit_code == 0, result.output

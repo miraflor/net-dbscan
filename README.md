@@ -5,11 +5,7 @@
 For a visual, step-by-step derivation of the algorithm—including network distance, ε-neighbourhoods, core connectivity, contested border points and the three border policies—see the **[net-dbscan documentation site](https://miraflor.github.io/net-dbscan/)**.
 
 ```text
-points
-  ↓
-optional boundary eligibility
-  ↓
-projected spatial network
+points + projected spatial network
   ↓
 Shapely/SciPy graph construction + deterministic snapping
   ↓
@@ -46,8 +42,6 @@ Single run:
 ```powershell
 net-dbscan cluster `
   --points "data\points.parquet" `
-  --boundary "data\boundary.gpkg" `
-  --boundary-layer boundary `
   --network "data\roads.gpkg" `
   --network-layer roads `
   --point-id-col canonical_id `
@@ -61,8 +55,6 @@ Grouped run:
 ```powershell
 net-dbscan cluster `
   --points "data\points.parquet" `
-  --boundary "data\boundary.gpkg" `
-  --boundary-layer boundary `
   --network "data\roads.gpkg" `
   --network-layer roads `
   --point-id-col canonical_id `
@@ -116,7 +108,7 @@ Repeated observations at exactly the same snapped network position are compresse
 
 ## Grouped runs
 
-With `--group-col`, groups are clustered independently while the network is prepared once and eligible points are snapped once.
+With `--group-col`, groups are clustered independently while the network is prepared once and the retained points are snapped once.
 
 Null and blank groups are excluded by default. Use `--missing-group-policy include` to treat them as explicit groups or `error` to stop the run.
 
@@ -181,7 +173,6 @@ from net_dbscan import DBSCANConfig, cluster_geodataframes
 
 out = cluster_geodataframes(
     points=gpd.read_parquet("points.parquet"),
-    boundary=gpd.read_file("boundary.gpkg"),  # or None
     network=gpd.read_file("roads.gpkg"),
     config=DBSCANConfig(eps=500, min_samples=5),
     point_id_col="canonical_id",
@@ -204,6 +195,8 @@ Network vertices and arcs are canonicalized by geometry, nearest-arc ties are de
 Grouped output filenames are preflighted case-insensitively so values such as `A` and `a` cannot overwrite one another on Windows.
 
 ## Scope
+
+`net-dbscan` clusters every supplied point. Study-area filtering or other eligibility filtering belongs upstream of the package.
 
 `net-dbscan` does not download networks, repair uncertain topology, infer intersections that are absent from the source geometry, choose the scientifically appropriate `eps`, or construct service/Voronoi territories.
 

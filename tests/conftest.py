@@ -3,7 +3,6 @@
 import geopandas as gpd
 import numpy as np
 import shapely
-from shapely.geometry import Polygon
 
 CRS = "EPSG:32651"
 
@@ -26,10 +25,6 @@ def touching_blobs(seed: int = 3) -> gpd.GeoDataFrame:
     xy = np.vstack([rng.normal([420, 600], 70, size=(160, 2)), rng.normal([780, 600], 70, size=(160, 2)), rng.uniform(0, 1200, size=(30, 2))])
     xy = np.clip(xy, 1, 1199)
     return gpd.GeoDataFrame({"point_id": [f"q{i:04d}" for i in range(len(xy))]}, geometry=shapely.points(xy), crs=CRS)
-
-
-def square_boundary(size: float = 1200.0) -> gpd.GeoDataFrame:
-    return gpd.GeoDataFrame(geometry=[Polygon([(-20, -20), (size + 20, -20), (size + 20, size + 20), (-20, size + 20)])], crs=CRS)
 
 
 def contested_motifs() -> gpd.GeoDataFrame:

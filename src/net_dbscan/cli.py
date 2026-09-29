@@ -52,7 +52,6 @@ def _print_summary(summary: pd.DataFrame) -> None:
 @app.command()
 def cluster(
     points: Path = typer.Option(..., "--points", help="Point layer (GeoParquet, GeoPackage, ...)."),
-    boundary: Path | None = typer.Option(None, "--boundary", help="Optional polygon layer; only covered points are used."),
     network: Path = typer.Option(..., "--network", help="Line network in a projected CRS."),
     output_dir: Path = typer.Option(..., "--output-dir", help="Folder for clustered points and diagnostics."),
     eps: float = typer.Option(..., "--eps", help="DBSCAN neighbourhood radius in network-CRS units."),
@@ -69,7 +68,6 @@ def cluster(
     group_universe: Path | None = typer.Option(None, "--group-universe", help="One-column CSV declaring expected group values."),
     missing_group_policy: str = typer.Option("exclude", "--missing-group-policy", help="'exclude', 'include', or 'error' for null/blank group values."),
     points_layer: str | None = typer.Option(None, "--points-layer"),
-    boundary_layer: str | None = typer.Option(None, "--boundary-layer"),
     network_layer: str | None = typer.Option(None, "--network-layer"),
     vertex_digits: int = typer.Option(
         DEFAULT_VERTEX_DIGITS,
@@ -89,13 +87,11 @@ def cluster(
     )
     common = dict(
         points_path=points,
-        boundary_path=boundary,
         network_path=network,
         output_dir=output_dir,
         config=config,
         point_id_col=point_id_col,
         points_layer=points_layer,
-        boundary_layer=boundary_layer,
         network_layer=network_layer,
         vertex_digits=vertex_digits,
         force=force,
@@ -120,12 +116,8 @@ def cluster(
 
     _print_summary(summary)
     excluded = int(summary.attrs.get("n_missing_group_input", 0)) if hasattr(summary, "attrs") else 0
-    inside_excluded = int(summary.attrs.get("n_missing_group_inside_boundary", 0)) if hasattr(summary, "attrs") else 0
     if excluded and summary.attrs.get("missing_group_policy") == "exclude":
-        typer.echo(
-            f"Excluded {excluded:,} input row(s) with null/blank group values "
-            f"({inside_excluded:,} inside the boundary)."
-        )
+        typer.echo(f"Excluded {excluded:,} input row(s) with null/blank group values.")
     outside = list(summary.attrs.get("groups_outside_universe") or [])
     if outside:
         shown = ", ".join(outside[:10]) + (" ..." if len(outside) > 10 else "")

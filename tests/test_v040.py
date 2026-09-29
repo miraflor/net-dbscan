@@ -68,7 +68,7 @@ def test_pipeline_reports_intrinsic_border_share_under_core_only():
         geometry=[Point(0, 0), Point(1, 0), Point(2, 0)],
         crs=CRS,
     )
-    out = cluster_geodataframes(points, None, roads, DBSCANConfig(eps=1.0, min_samples=3, border_policy="core_only"))
+    out = cluster_geodataframes(points, roads, DBSCANConfig(eps=1.0, min_samples=3, border_policy="core_only"))
     assert out.points["is_border"].tolist() == [True, False, True]
     assert out.points["is_noise"].tolist() == [True, False, True]
     assert out.summary["border_share"] == pytest.approx(2 / 3)

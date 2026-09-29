@@ -1,18 +1,10 @@
 import geopandas as gpd
 import pytest
-from shapely.geometry import LineString, MultiLineString, Point, Polygon
+from shapely.geometry import LineString, MultiLineString, Point
 
-from net_dbscan.io import canonical_order, covered_by, prepare_boundary, prepare_network, prepare_points
+from net_dbscan.io import canonical_order, prepare_network, prepare_points
 
 CRS = "EPSG:32651"
-
-
-def test_boundary_covers_edge_point():
-    boundary = gpd.GeoDataFrame(geometry=[Polygon([(0,0),(10,0),(10,10),(0,10)])], crs=CRS)
-    points = gpd.GeoDataFrame({"point_id":["edge","out"]}, geometry=[Point(0,5), Point(-1,5)], crs=CRS)
-    p = prepare_points(points, CRS, "point_id")
-    b = prepare_boundary(boundary, CRS)
-    assert p.loc[covered_by(p,b),"point_id"].tolist() == ["edge"]
 
 
 def test_network_requires_projected_crs():

@@ -28,8 +28,6 @@ from .config import (
 from .io import (
     _require_pyarrow,
     canonical_order,
-    covered_by,
-    prepare_boundary,
     prepare_network,
     prepare_points,
     read_vector,
@@ -78,7 +76,6 @@ SUMMARY_COLUMNS = [
     "declared_in_universe",
     "missing_group_policy",
     "n_missing_group_input",
-    "n_missing_group_inside_boundary",
     "seconds",
 ]
 
@@ -128,8 +125,8 @@ def _empty_clusters() -> pd.DataFrame:
     )
 
 
-def _empty_points(inside: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
-    out = inside.copy()
+def _empty_points(points: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
+    out = points.copy()
     out["cluster_id"] = pd.Series(dtype=object)
     out["is_noise"] = pd.Series(dtype=bool)
     out["is_core"] = pd.Series(dtype=bool)
@@ -142,16 +139,16 @@ def _empty_points(inside: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
 
 
 def _cluster_unit(
-    inside: gpd.GeoDataFrame,
+    points: gpd.GeoDataFrame,
     snaps: Snaps,
     graph: NetworkGraph | None,
     config: DBSCANConfig,
 ) -> tuple[gpd.GeoDataFrame, pd.DataFrame, dict[str, Any]]:
-    """Cluster points already inside the boundary and in canonical order."""
-    n = len(inside)
+    """Cluster points in canonical order."""
+    n = len(points)
     stats: dict[str, Any] = {"n_points": int(n)}
     if n == 0:
-        return _empty_points(inside), _empty_clusters(), stats
+        return _empty_points(points), _empty_clusters(), stats
     if graph is None:
         raise RuntimeError("non-empty clustering unit has no network graph")
 
@@ -173,7 +170,7 @@ def _cluster_unit(
     obs_label = result.labels[position]
     obs_core = result.is_core[position]
     obs_border = result.is_border[position]
-    out = inside.copy()
+    out = points.copy()
     out["cluster_id"] = pd.Series(ids, index=out.index, dtype=object)
     out["is_noise"] = obs_label < 0
     out["is_core"] = obs_core
@@ -241,40 +238,29 @@ def _check_snap_distance(ids, distances: np.ndarray, limit: float | None) -> Non
         )
 
 
-def _prepare(network: gpd.GeoDataFrame, boundary: gpd.GeoDataFrame | None):
-    network = prepare_network(network)
-    return network, network.crs, (None if boundary is None else prepare_boundary(boundary, network.crs))
-
-
-def _inside(work: gpd.GeoDataFrame, boundary_geom) -> np.ndarray:
-    if boundary_geom is None:
-        return np.ones(len(work), dtype=bool)
-    return covered_by(work, boundary_geom)
-
-
-def _snap_inside(network: gpd.GeoDataFrame, inside: gpd.GeoDataFrame, vertex_digits: int | None):
-    if len(inside) == 0:
+def _snap_points_to_network(network: gpd.GeoDataFrame, points: gpd.GeoDataFrame, vertex_digits: int | None):
+    if len(points) == 0:
         return None, empty_snaps()
     graph = build_network_graph(network.geometry.to_numpy(), vertex_digits=vertex_digits)
-    xy = np.column_stack([inside.geometry.x.to_numpy(), inside.geometry.y.to_numpy()])
+    xy = np.column_stack([points.geometry.x.to_numpy(), points.geometry.y.to_numpy()])
     return graph, snap_points(graph, xy)
 
 
 def _run_unit(
-    inside: gpd.GeoDataFrame,
+    points: gpd.GeoDataFrame,
     snaps: Snaps,
     graph: NetworkGraph | None,
     config: DBSCANConfig,
     point_id_col: str,
 ) -> ClusterOutputs:
     start = time.perf_counter()
-    order = canonical_order(inside[point_id_col].tolist()) if len(inside) else np.empty(0, dtype=np.int64)
-    inside = inside.iloc[order].reset_index(drop=True)
+    order = canonical_order(points[point_id_col].tolist()) if len(points) else np.empty(0, dtype=np.int64)
+    points = points.iloc[order].reset_index(drop=True)
     snaps = snaps.subset(order)
-    _check_snap_distance(inside[point_id_col].tolist(), snaps.snap_distance, config.max_snap_distance)
-    points, clusters, stats = _cluster_unit(inside, snaps, graph, config)
+    _check_snap_distance(points[point_id_col].tolist(), snaps.snap_distance, config.max_snap_distance)
+    clustered_points, clusters, stats = _cluster_unit(points, snaps, graph, config)
     stats["seconds"] = round(time.perf_counter() - start, 3)
-    return ClusterOutputs(points=points, clusters=clusters, summary=stats)
+    return ClusterOutputs(points=clustered_points, clusters=clusters, summary=stats)
 
 
 def _analysis_metadata(crs, graph: NetworkGraph | None) -> dict[str, Any]:
@@ -294,26 +280,24 @@ def _analysis_metadata(crs, graph: NetworkGraph | None) -> dict[str, Any]:
 
 def cluster_geodataframes(
     points: gpd.GeoDataFrame,
-    boundary: gpd.GeoDataFrame | None,
     network: gpd.GeoDataFrame,
     config: DBSCANConfig,
     *,
     point_id_col: str = "point_id",
     vertex_digits: int | None = DEFAULT_VERTEX_DIGITS,
 ) -> ClusterOutputs:
-    """Cluster all boundary-covered points as one network-distance DBSCAN unit.
+    """Cluster all supplied points as one network-distance DBSCAN unit.
 
-    The boundary selects observations only; it never clips the network.
     ``vertex_digits`` controls significant-digit rounding used to identify
     shared network vertices. Set it to ``None`` to disable rounding.
     """
     if not isinstance(config, DBSCANConfig):
         raise TypeError("config must be a DBSCANConfig")
-    network, crs, boundary_geom = _prepare(network, boundary)
+    network = prepare_network(network)
+    crs = network.crs
     work = prepare_points(points, crs, point_id_col)
-    inside = work.loc[_inside(work, boundary_geom)].reset_index(drop=True)
-    graph, snaps = _snap_inside(network, inside, vertex_digits)
-    outputs = _run_unit(inside, snaps, graph, config, point_id_col)
+    graph, snaps = _snap_points_to_network(network, work, vertex_digits)
+    outputs = _run_unit(work, snaps, graph, config, point_id_col)
     outputs.summary = {"group": None, "n_points_input": int(len(points)), **outputs.summary}
     outputs.analysis = _analysis_metadata(crs, graph)
     return outputs
@@ -364,13 +348,11 @@ def _refuse_existing(paths, force: bool) -> None:
 def cluster_files(
     *,
     points_path: str | Path,
-    boundary_path: str | Path | None = None,
     network_path: str | Path,
     output_dir: str | Path,
     config: DBSCANConfig,
     point_id_col: str = "point_id",
     points_layer: str | None = None,
-    boundary_layer: str | None = None,
     network_layer: str | None = None,
     vertex_digits: int | None = DEFAULT_VERTEX_DIGITS,
     force: bool = False,
@@ -388,7 +370,6 @@ def cluster_files(
     _require_pyarrow()
     outputs = cluster_geodataframes(
         read_vector(points_path, name="points", layer=points_layer),
-        None if boundary_path is None else read_vector(boundary_path, name="boundary", layer=boundary_layer),
         read_vector(network_path, name="network", layer=network_layer),
         config,
         point_id_col=point_id_col,
@@ -400,8 +381,6 @@ def cluster_files(
     inputs = {
         "points": str(points_path),
         "points_layer": points_layer,
-        "boundary": None if boundary_path is None else str(boundary_path),
-        "boundary_layer": boundary_layer,
         "network": str(network_path),
         "network_layer": network_layer,
         "point_id_col": point_id_col,
@@ -427,7 +406,6 @@ def group_output_token(value) -> str:
 def cluster_files_by_column(
     *,
     points_path: str | Path,
-    boundary_path: str | Path | None = None,
     network_path: str | Path,
     output_dir: str | Path,
     group_col: str,
@@ -437,7 +415,6 @@ def cluster_files_by_column(
     missing_group_policy: str = "exclude",
     point_id_col: str = "point_id",
     points_layer: str | None = None,
-    boundary_layer: str | None = None,
     network_layer: str | None = None,
     vertex_digits: int | None = DEFAULT_VERTEX_DIGITS,
     force: bool = False,
@@ -447,7 +424,6 @@ def cluster_files_by_column(
         raise TypeError("config must be a DBSCANConfig")
     _require_pyarrow()
     points = read_vector(points_path, name="points", layer=points_layer)
-    boundary = None if boundary_path is None else read_vector(boundary_path, name="boundary", layer=boundary_layer)
     network = read_vector(network_path, name="network", layer=network_layer)
     if group_col not in points.columns:
         raise ValueError(f"group column {group_col!r} not found")
@@ -519,29 +495,27 @@ def cluster_files_by_column(
     run_files = [output_dir / "summary.csv", output_dir / "manifest.json"]
     _refuse_existing([p for paths in planned.values() for p in paths.values()] + run_files, force)
 
-    network, crs, boundary_geom = _prepare(network, boundary)
+    network = prepare_network(network)
+    crs = network.crs
     work = prepare_points(points, crs, point_id_col)
-    inside_mask = _inside(work, boundary_geom)
-    inside_all = work.loc[inside_mask].reset_index(drop=True)
-    inside_keys = keys.to_numpy()[inside_mask]
-    missing_inside = int(np.isin(inside_keys, [NULL_GROUP_KEY, BLANK_GROUP_KEY]).sum())
+    work_keys = keys.to_numpy()
 
     # Missing groups excluded from the analysis are removed before snapping,
     # which is the expensive shared preprocessing stage.
-    if missing_group_policy == "exclude" and missing_inside:
-        keep = ~np.isin(inside_keys, [NULL_GROUP_KEY, BLANK_GROUP_KEY])
-        inside_all = inside_all.loc[keep].reset_index(drop=True)
-        inside_keys = inside_keys[keep]
+    if missing_group_policy == "exclude" and n_missing_input:
+        keep = ~np.isin(work_keys, [NULL_GROUP_KEY, BLANK_GROUP_KEY])
+        work = work.loc[keep].reset_index(drop=True)
+        work_keys = work_keys[keep]
 
-    graph, snaps_all = _snap_inside(network, inside_all, vertex_digits)
+    graph, snaps_all = _snap_points_to_network(network, work, vertex_digits)
     analysis = _analysis_metadata(crs, graph)
 
     outside_universe_keys = [v for v in values if universe is not None and v not in universe_set]
     outside_universe = [group_display(v) for v in outside_universe_keys]
     rows: list[dict[str, Any]] = []
     for key in values:
-        rows_in = np.flatnonzero(inside_keys == key)
-        subset = inside_all.iloc[rows_in].reset_index(drop=True)
+        rows_in = np.flatnonzero(work_keys == key)
+        subset = work.iloc[rows_in].reset_index(drop=True)
         group_snaps = snaps_all.subset(rows_in)
         try:
             outputs = _run_unit(subset, group_snaps, graph, configs[key], point_id_col)
@@ -550,7 +524,7 @@ def cluster_files_by_column(
             context = (
                 f"group {group_display(key)!r} failed "
                 f"(n_points_input={int((keys == key).sum()):,}, "
-                f"n_points_inside={len(subset):,}, n_positions={n_positions:,})"
+                f"n_points={len(subset):,}, n_positions={n_positions:,})"
             )
             if hasattr(exc, "add_note"):
                 exc.add_note(context)
@@ -566,7 +540,6 @@ def cluster_files_by_column(
             "declared_in_universe": (key in universe_set) if universe is not None else None,
             "missing_group_policy": missing_group_policy,
             "n_missing_group_input": n_missing_input,
-            "n_missing_group_inside_boundary": missing_inside,
         }
         rows.append(summary)
         write_geoparquet(planned[key]["points"], outputs.points, force=force)
@@ -575,14 +548,11 @@ def cluster_files_by_column(
     summary = _summary_frame(rows)
     summary.attrs["missing_group_policy"] = missing_group_policy
     summary.attrs["n_missing_group_input"] = n_missing_input
-    summary.attrs["n_missing_group_inside_boundary"] = missing_inside
     summary.attrs["groups_outside_universe"] = outside_universe
     write_csv(output_dir / "summary.csv", summary, force=force)
     inputs = {
         "points": str(points_path),
         "points_layer": points_layer,
-        "boundary": None if boundary_path is None else str(boundary_path),
-        "boundary_layer": boundary_layer,
         "network": str(network_path),
         "network_layer": network_layer,
         "group_col": group_col,
@@ -595,7 +565,6 @@ def cluster_files_by_column(
         "group_universe": list(group_universe) if group_universe is not None else None,
         "missing_group_policy": missing_group_policy,
         "n_missing_group_input": n_missing_input,
-        "n_missing_group_inside_boundary": missing_inside,
         "groups_outside_universe": outside_universe,
         "groups": {
             group_display(key): {"files": {k: str(p.relative_to(output_dir)) for k, p in planned[key].items()}}
