@@ -1,0 +1,421 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="A visual derivation of net-dbscan: network distance, epsilon neighbourhoods, core connectivity, border policies and sparse shortest-path search.">
+  <meta name="theme-color" content="#263238">
+  <title>How net-dbscan works — net-dbscan documentation</title>
+  <link rel="stylesheet" href="assets/css/site.css">
+  <script>
+    window.MathJax = {
+      tex: {
+        inlineMath: [['\\(', '\\)']],
+        displayMath: [['\\[', '\\]']]
+      },
+      options: { skipHtmlTags: ['script', 'noscript', 'style', 'textarea', 'pre', 'code'] }
+    };
+  </script>
+  <script defer src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
+  <script defer src="assets/js/site.js"></script>
+</head>
+<body>
+  <button class="mobile-menu" id="mobile-menu" aria-label="Open documentation navigation" aria-expanded="false">
+    <span></span><span></span><span></span>
+  </button>
+
+  <aside class="sidebar" id="sidebar">
+    <div class="brand">
+      <a class="brand-name" href="./">net-dbscan</a>
+      <div class="brand-subtitle">visual algorithm guide</div>
+    </div>
+    <div class="search-wrap">
+      <label class="sr-only" for="doc-search">Search this page</label>
+      <input id="doc-search" type="search" placeholder="Search this guide" autocomplete="off">
+      <kbd>/</kbd>
+    </div>
+
+<nav class="doc-nav" aria-label="Documentation navigation">
+  <div class="nav-section">Worked example</div>
+  <a href="#how-net-dbscan-works" data-nav-label="How net-dbscan works">How net-dbscan works</a>
+  <a href="#start-with-one-small-network" data-nav-label="Worked example">Worked example</a>
+
+  <div class="nav-section">Algorithm</div>
+  <a href="#1-network-distance" data-nav-label="Network shortest path distance">1. Network distance</a>
+  <a href="#2-epsilon-neighbourhoods" data-nav-label="epsilon neighbourhood core min samples">2. ε-neighbourhoods</a>
+  <a href="#3-core-border-and-noise" data-nav-label="core border noise intrinsic">3. Core / border / noise</a>
+  <a href="#4-core-components" data-nav-label="core graph connected components clusters">4. Core components</a>
+  <a href="#5-border-policies" data-nav-label="border policies expansion nearest core core only">5. Border policies</a>
+  <a href="#6-sparse-neighbour-search" data-nav-label="sparse epsilon graph shortest path">6. Sparse search</a>
+  <a href="#7-weighted-duplicate-positions" data-nav-label="duplicates sample weight">7. Duplicate weights</a>
+
+  <div class="nav-section">Package</div>
+  <a href="#from-math-to-the-package" data-nav-label="Python API package pipeline">Package pipeline</a>
+  <a href="#what-is-standard-and-what-is-net-dbscan-specific" data-nav-label="standard DBSCAN comparison">Standard vs net-dbscan</a>
+  <a href="#references" data-nav-label="references papers">References</a>
+
+  <div class="nav-section">Project</div>
+  <a href="https://github.com/miraflor/net-dbscan">GitHub repository ↗</a>
+</nav>
+
+    <div class="sidebar-footer">
+      <span>v0.4.0</span>
+      <a href="https://github.com/miraflor/net-dbscan">View source</a>
+    </div>
+  </aside>
+
+  <div class="sidebar-scrim" id="sidebar-scrim"></div>
+
+  <main class="content-shell">
+    <article class="doc-content" id="doc-content">
+
+<h1 id="how-net-dbscan-works">How <code>net-dbscan</code> works</h1>
+
+<p class="lede"><code>net-dbscan</code> runs DBSCAN in <strong>network-distance space</strong>.
+The observations are snapped to a supplied line network, the ε-neighbour relation is built from
+shortest-path distance on that network, core positions are identified by weighted neighbourhood
+mass, and clusters arise from connected components of the core-point ε graph. Border assignment
+is then handled explicitly by one of three policies.</p>
+
+<div class="admonition">
+  <strong>This is a worked derivation.</strong>
+  Every main figure below uses the same ten-position synthetic network example with
+  <code>eps = 1.3</code> and <code>min_samples = 4</code>.
+  The example contains two dense core components, one contested border position, and one isolated
+  noise position.
+</div>
+
+<h2 id="start-with-one-small-network">Start with one small network</h2>
+
+<p>The raw observations need not sit exactly on the line network. The package first snaps each point
+to the nearest point of the nearest canonical network arc. Snap distance is retained as QA metadata
+but is not added to the clustering metric.</p>
+
+
+<figure class="tutorial-figure">
+  <img src="assets/tutorial/01_input_and_snapping.svg" alt="Ten raw observations and their snapped positions on a three-arm line network.">
+  <figcaption>Figure 1. Raw observations are snapped to continuous positions on the supplied network.</figcaption>
+</figure>
+
+
+<div class="stage-list">
+<strong>The worked sequence</strong>
+<ol>
+  <li>Replace straight-line distance by network shortest-path distance.</li>
+  <li>Build the exact ε-neighbour relation in network space.</li>
+  <li>Classify core, border, and noise positions.</li>
+  <li>Take connected components of the core-point ε graph.</li>
+  <li>Resolve border assignments according to the selected border policy.</li>
+  <li>Expand weighted position-level results back to observations.</li>
+</ol>
+</div>
+
+<h2 id="1-network-distance">1. Define distance on the network</h2>
+
+<p>If observations <span class="math-inline">\(i\)</span> and <span class="math-inline">\(j\)</span>
+snap to network positions <span class="math-inline">\(s_i\)</span> and
+<span class="math-inline">\(s_j\)</span>, then</p>
+
+<div class="equation">
+\[
+d_G(i,j)
+=
+\min_{\pi:s_i\rightsquigarrow s_j}
+\sum_{e\in\pi} \ell(e).
+\]
+</div>
+
+<p>The path must follow actual network arcs. Two lines that cross geometrically are not connected
+unless they share a vertex after <code>vertex_digits</code> canonicalisation.</p>
+
+
+<figure class="tutorial-figure">
+  <img src="assets/tutorial/02_network_distance.svg" alt="Two observations on different network arms with a network route and a shorter straight-line shortcut.">
+  <figcaption>Figure 2. D and E are 2.35 units apart along the network. Their Euclidean shortcut is not used by DBSCAN.</figcaption>
+</figure>
+
+
+<h2 id="2-epsilon-neighbourhoods">2. Build ε-neighbourhoods in network space</h2>
+
+<p>The network ε-neighbourhood of position <span class="math-inline">\(i\)</span> is</p>
+
+<div class="equation">
+\[
+N_\varepsilon(i)
+=
+\left\{j : d_G(i,j) \le \varepsilon\right\}.
+\]
+</div>
+
+<p>For ordinary unweighted observations, a position is core when</p>
+
+<div class="equation">
+\[
+|N_\varepsilon(i)| \ge \texttt{min_samples}.
+\]
+</div>
+
+<p>With <code>eps = 1.3</code> and <code>min_samples = 4</code>, position D has
+5 observations in its network ε-neighbourhood and is core.
+The contested position I sees only itself plus one core position from each dense component,
+for total neighbourhood weight 3; it is therefore not core.</p>
+
+
+<figure class="tutorial-figure">
+  <img src="assets/tutorial/03_epsilon_neighborhoods.svg" alt="One core and one non-core epsilon neighborhood shown as network paths.">
+  <figcaption>Figure 3. ε-neighbourhoods bend through the network; they are not Euclidean discs.</figcaption>
+</figure>
+
+
+<h2 id="3-core-border-and-noise">3. Core, border, and noise are intrinsic</h2>
+
+<p>Once core status is known, a non-core position is an intrinsic border position if it lies within
+ε of at least one core position:</p>
+
+<div class="equation">
+\[
+\operatorname{border}(i)
+\iff
+\neg\operatorname{core}(i)
+\;\land\;
+\exists j\;[
+\operatorname{core}(j)
+\land d_G(i,j)\le\varepsilon].
+\]
+</div>
+
+<p>A non-core position with no core neighbour is noise. In the worked example, A–H are core,
+I is border, and J is noise.</p>
+
+
+<figure class="tutorial-figure">
+  <img src="assets/tutorial/04_core_border_noise.svg" alt="Core positions, one intrinsic border position, and one noise position on the network.">
+  <figcaption>Figure 4. Border status is a property of the ε geometry and does not depend on the later assignment policy.</figcaption>
+</figure>
+
+
+<h2 id="4-core-components">4. Core connectivity defines the clusters</h2>
+
+<p>Form the core graph</p>
+
+<div class="equation">
+\[
+G_\varepsilon^{\mathrm{core}}
+=
+\left(
+V_{\mathrm{core}},
+E_{\mathrm{core}}
+\right),
+\qquad
+(i,j)\in E_{\mathrm{core}}
+\iff
+d_G(i,j)\le\varepsilon.
+\]
+</div>
+
+<p>The connected components of this graph are the invariant DBSCAN core clusters.
+Border points do not connect two otherwise separate core components.</p>
+
+
+<figure class="tutorial-figure">
+  <img src="assets/tutorial/05_core_components.svg" alt="Two disconnected core epsilon components with the contested border point outside the core graph.">
+  <figcaption>Figure 5. The contested border point touches both components but cannot merge them because it is not core.</figcaption>
+</figure>
+
+
+<div class="admonition">
+  <strong>Important invariant.</strong>
+  In <code>net-dbscan</code>, <code>border_policy</code> never changes core status or these core
+  connected components. It changes only what happens to non-core border observations.
+</div>
+
+<h2 id="5-border-policies">5. Resolve contested border points</h2>
+
+<p>Position I is within ε of two different core clusters. Its nearest left-cluster core is D at
+network distance <strong>1.30</strong>; its nearest upper-cluster core is E at
+<strong>1.25</strong>. This single point lets us see all three policies.</p>
+
+<h3 id="expansion-policy"><code>expansion</code>: standard DBSCAN expansion</h3>
+
+<p>This is the standard scikit-learn DBSCAN result on the deterministic sparse graph. The border point
+is assigned when cluster expansion first reaches it. In this worked ordering, I joins the left
+cluster.</p>
+
+
+<figure class="tutorial-figure">
+  <img src="assets/tutorial/06_policy_expansion.svg" alt="Standard expansion assigns the contested border point to the left cluster.">
+  <figcaption>Figure 6. Standard DBSCAN expansion assigns I to the first expanding core component that claims it.</figcaption>
+</figure>
+
+
+<h3 id="nearest-core-policy"><code>nearest_core</code>: nearest core cluster</h3>
+
+<p>For every border position <span class="math-inline">\(i\)</span>, choose the adjacent core
+position minimising network distance:</p>
+
+<div class="equation">
+\[
+j^*(i)
+=
+\arg\min_{j:\operatorname{core}(j),\ d_G(i,j)\le\varepsilon}
+d_G(i,j).
+\]
+</div>
+
+<p>An exact distance tie goes to the smaller deterministic core-cluster label.
+Here E is closer than D, so I moves to the upper cluster.</p>
+
+
+<figure class="tutorial-figure">
+  <img src="assets/tutorial/07_policy_nearest_core.svg" alt="Nearest-core assignment sends the contested border point to the upper cluster.">
+  <figcaption>Figure 7. I joins the upper cluster because 1.25 < 1.30.</figcaption>
+</figure>
+
+
+<h3 id="core-only-policy"><code>core_only</code>: DBSCAN*</h3>
+
+<p>Leave every border point unassigned. The intrinsic field <code>is_border</code> remains true, but
+the final label is noise.</p>
+
+
+<figure class="tutorial-figure">
+  <img src="assets/tutorial/08_policy_core_only.svg" alt="Core-only policy leaves the contested border point as noise.">
+  <figcaption>Figure 8. Under DBSCAN*, only core connected components receive cluster labels.</figcaption>
+</figure>
+
+
+<table class="worked-values">
+<thead>
+<tr><th>Property</th><th><code>expansion</code></th><th><code>nearest_core</code></th><th><code>core_only</code></th></tr>
+</thead>
+<tbody>
+<tr><td>Core positions</td><td>same 8</td><td>same 8</td><td>same 8</td></tr>
+<tr><td>Core components</td><td>same 2</td><td>same 2</td><td>same 2</td></tr>
+<tr><td>I intrinsic border?</td><td>yes</td><td>yes</td><td>yes</td></tr>
+<tr><td>I final assignment</td><td>left cluster</td><td>upper cluster</td><td>noise</td></tr>
+</tbody>
+</table>
+
+<h2 id="6-sparse-neighbour-search">6. The package stores only the ε graph it needs</h2>
+
+<p>Unlike an all-pairs DBSCAN implementation, <code>net-dbscan</code> does not build the full
+distance matrix. It runs bounded shortest-path searches and stores exactly the finite pairs satisfying</p>
+
+<div class="equation">
+\[
+d_G(i,j) \le \varepsilon.
+\]
+</div>
+
+
+<figure class="tutorial-figure">
+  <img src="assets/tutorial/09_sparse_epsilon_graph.svg" alt="The complete sparse epsilon graph drawn over the worked network.">
+  <figcaption>Figure 9. Only network pairs inside ε are materialised. Unlike net-hdbscan's max_distance, DBSCAN ε is both the model radius and the exact search bound.</figcaption>
+</figure>
+
+
+<p>This distinction matters: changing <code>eps</code> changes the DBSCAN model itself.
+It is not an adaptive computational horizon.</p>
+
+<h2 id="7-weighted-duplicate-positions">7. Duplicate snapped positions become weights</h2>
+
+<p>Several observations can snap to exactly the same network position. The package compresses them into
+one distinct position with integer weight <span class="math-inline">\(w_i\)</span>. The weighted
+neighbourhood mass is</p>
+
+<div class="equation">
+\[
+M_\varepsilon(i)
+=
+w_i +
+\sum_{j\ne i,\ d_G(i,j)\le\varepsilon} w_j,
+\]
+</div>
+
+<p>and the core rule becomes</p>
+
+<div class="equation">
+\[
+M_\varepsilon(i) \ge \texttt{min_samples}.
+\]
+</div>
+
+
+<figure class="tutorial-figure">
+  <img src="assets/tutorial/10_weighted_duplicates.svg" alt="Four colocated observations compressed into one snapped position with weight four.">
+  <figcaption>Figure 10. Duplicate compression preserves ordinary DBSCAN min_samples semantics without materialising zero-distance duplicate pairs.</figcaption>
+</figure>
+
+
+<h2 id="from-math-to-the-package">From the derivation to the package</h2>
+
+<pre><code class="language-python">from net_dbscan import DBSCANConfig, cluster_geodataframes
+
+out = cluster_geodataframes(
+    points=points,
+    boundary=boundary,   # may be None
+    network=network,
+    config=DBSCANConfig(
+        eps=500,
+        min_samples=5,
+        border_policy="nearest_core",
+    ),
+    point_id_col="canonical_id",
+)
+
+out.points
+out.clusters
+out.summary
+out.analysis</code></pre>
+
+<p>The lower-level sequence is direct:</p>
+
+<pre><code class="language-text">line network
+    ↓ build_network_graph
+raw points
+    ↓ snap_points
+snapped observations
+    ↓ distinct_positions
+weighted network positions
+    ↓ neighbor_graph(max_distance=eps)
+sparse matrix of d_G ≤ eps
+    ↓ dbscan(..., metric="precomputed")
+weighted core positions
+    ↓ connected core components
+intrinsic DBSCAN clusters
+    ↓ border_policy
+final labels</code></pre>
+
+<h2 id="what-is-standard-and-what-is-net-dbscan-specific">What is standard DBSCAN and what is specific to <code>net-dbscan</code>?</h2>
+
+<table>
+<thead><tr><th>Stage</th><th>Standard DBSCAN idea</th><th><code>net-dbscan</code></th></tr></thead>
+<tbody>
+<tr><td>Base metric</td><td>Usually Euclidean or another metric</td><td>Shortest path between continuous snapped positions on a supplied line network</td></tr>
+<tr><td>ε neighbourhood</td><td>All points within radius ε</td><td>All snapped positions with network distance ≤ ε</td></tr>
+<tr><td>Core criterion</td><td>At least <code>min_samples</code> observations in ε neighbourhood</td><td>Weighted neighbourhood mass; duplicate snapped positions carry integer multiplicity</td></tr>
+<tr><td>Core clusters</td><td>Density-connected core components</td><td>Connected components of the sparse network ε graph restricted to core positions</td></tr>
+<tr><td>Border assignment</td><td>Standard expansion</td><td><code>expansion</code>, <code>nearest_core</code>, or <code>core_only</code></td></tr>
+<tr><td>Distance computation</td><td>Often implicit or dense</td><td>Spatially local bounded shortest-path search; only ε pairs are stored</td></tr>
+<tr><td>Topology</td><td>Not usually an issue</td><td>Crossings connect only through shared canonical vertices; MultiLineString parts are not implicitly joined</td></tr>
+</tbody>
+</table>
+
+<h2 id="references">References</h2>
+<ul>
+  <li>Ester, Kriegel, Sander &amp; Xu (1996), <em>A Density-Based Algorithm for Discovering Clusters in Large Spatial Databases with Noise</em>.</li>
+  <li>scikit-learn DBSCAN documentation and implementation for standard expansion semantics.</li>
+  <li><a href="https://github.com/miraflor/net-dbscan">net-dbscan source repository</a>.</li>
+</ul>
+
+      <footer class="page-footer">
+        <div><strong>net-dbscan</strong><br>Network-distance DBSCAN for geospatial point observations.</div>
+        <div><a href="https://github.com/miraflor/net-dbscan">GitHub</a> ·
+             <a href="https://github.com/miraflor/net-dbscan/issues">Issues</a></div>
+      </footer>
+    </article>
+  </main>
+
+  <button class="back-to-top" id="back-to-top" aria-label="Back to top">↑</button>
+</body>
+</html>
