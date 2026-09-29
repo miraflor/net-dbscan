@@ -2,6 +2,8 @@
 
 `net-dbscan` clusters geospatial point observations with **DBSCAN using shortest-path distance on a supplied spatial network** rather than Euclidean distance.
 
+For a visual, step-by-step derivation of the algorithm—including network distance, ε-neighbourhoods, core connectivity, contested border points and the three border policies—see the **[net-dbscan documentation site](https://miraflor.github.io/net-dbscan/)**.
+
 ```text
 points
   ↓
