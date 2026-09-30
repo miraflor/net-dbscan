@@ -68,11 +68,45 @@ net-dbscan cluster `
 
 `--vertex-digits` controls the significant-digit rounding used to identify shared network vertices. The default is `11`; this makes graph construction deterministic while tolerating tiny coordinate noise. Set `vertex_digits=None` only through the Python API when exact coordinate identity is required.
 
+## Network semantics
+
+Each LineString is split into straight arcs between consecutive vertices. MultiLineStrings are exploded into independent parts before graph construction.
+
+Two network features connect **only when they share a vertex after `vertex_digits` rounding**. A geometric crossing without a shared vertex remains disconnected, which is appropriate for cases such as a bridge crossing another road.
+
+Every observation is snapped to the nearest point on the nearest arc. Ties between equally near arcs are broken by canonical arc order, so snapping is deterministic under network-row reordering.
+
+For observations $`i`$ and $`j`$, with snapped positions $`s_i`$ and $`s_j`$, the clustering metric is
+
+```math
+d(i, j) = d_N(s_i, s_j), \qquad s_i = \arg\min_{z \in N} \lVert x_i - z \rVert,
+```
+
+where $`d_N`$ is the shortest network distance, $`x_i`$ is the original point, and $`N`$ is the set of all locations on the network. The snap distance of observation $`i`$ is $`\lVert x_i - s_i \rVert`$, and $`d(i, j) = \infty`$ when $`s_i`$ and $`s_j`$ lie on different network components.
+
+Point-to-network snap distance is not added to the clustering metric. It is retained as QA metadata. Observations on disconnected network components are never neighbours.
+
 ## DBSCAN parameters
 
 `eps` is the DBSCAN neighbourhood radius in the linear units of the projected network CRS. It is also the exact maximum network distance searched by the sparse neighbour engine. Changing `eps` changes the DBSCAN model; it is not an adaptive computational horizon.
 
 `min_samples` counts observations, including multiplicity when several observations snap to the same network position.
+
+### The model in symbols
+
+Observations at one snapped network position form one position $`p`$ with integer weight $`w_p`$, their number. The ε-neighbourhood of $`p`$ and its weight are
+
+```math
+N_\varepsilon(p) = \{\, q : d(p, q) \le \varepsilon \,\}, \qquad W(p) = \sum_{q \in N_\varepsilon(p)} w_q,
+```
+
+where the sum includes $`p`$ itself, because $`d(p, p) = 0`$.
+
+- A position $`p`$ is a **core** position when $`W(p) \ge`$ `min_samples`.
+- The DBSCAN clusters are the connected components of the core positions, where two core positions are connected when $`d(p, q) \le \varepsilon`$.
+- A non-core position $`p`$ is a **border** position when $`N_\varepsilon(p)`$ contains at least one core position. `n_candidate_clusters` counts the distinct clusters of those core positions; for a core position it is 1.
+
+### Border policies
 
 `border_policy` controls only non-core observations that lie within `eps` of a core cluster:
 
@@ -82,25 +116,23 @@ net-dbscan cluster `
 
 Core status and the connected components of core positions are identical under all three policies.
 
-## Network semantics
+With `nearest_core`, a border position $`p`$ takes the cluster of the core position
 
-Each LineString is split into straight arcs between consecutive vertices. MultiLineStrings are exploded into independent parts before graph construction.
-
-Two network features connect **only when they share a vertex after `vertex_digits` rounding**. A geometric crossing without a shared vertex remains disconnected, which is appropriate for cases such as a bridge crossing another road.
-
-Every observation is snapped to the nearest point on the nearest arc. Ties between equally near arcs are broken by canonical arc order, so snapping is deterministic under network-row reordering.
-
-For observations `i` and `j`, with snapped positions `s_i` and `s_j`, the clustering metric is
-
-```text
-d(i, j) = shortest network distance from s_i to s_j.
+```math
+q^*(p) = \arg\min_{q \in N_\varepsilon(p),\; q \text{ core}} \bigl(d(p, q),\ \mathrm{cluster}(q)\bigr),
 ```
 
-Point-to-network snap distance is not added to the clustering metric. It is retained as QA metadata. Observations on disconnected network components are never neighbours.
+where pairs are compared in order: the smallest network distance first, and for an exact tie between clusters, the smaller cluster label.
 
 ## Sparse neighbour search
 
 The package does not build an all-pairs distance matrix. It searches only network paths that can produce position pairs within `eps`, using spatially local SciPy shortest-path batches and hard-bounded candidate chunks.
+
+In symbols, the stored neighbour graph over distinct positions is exactly
+
+```math
+E_\varepsilon = \{\, (p, q) : p \ne q,\ d(p, q) \le \varepsilon \,\}.
+```
 
 `max_neighbor_pairs` is a safety limit on stored unordered pairs. The default is 10,000,000. If a run exceeds it, the package stops with a contextual error instead of allowing an uncontrolled allocation.
 
