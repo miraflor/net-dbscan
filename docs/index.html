@@ -59,7 +59,7 @@
 </nav>
 
     <div class="sidebar-footer">
-      <span>v0.4.0</span>
+      <span>v0.5.0</span>
       <a href="https://github.com/miraflor/net-dbscan">View source</a>
     </div>
   </aside>
@@ -91,12 +91,10 @@ is then handled explicitly by one of three policies.</p>
 to the nearest point of the nearest canonical network arc. Snap distance is retained as QA metadata
 but is not added to the clustering metric.</p>
 
-
 <figure class="tutorial-figure">
   <img src="assets/tutorial/01_input_and_snapping.svg" alt="Ten raw observations and their snapped positions on a three-arm line network.">
   <figcaption>Figure 1. Raw observations are snapped to continuous positions on the supplied network.</figcaption>
 </figure>
-
 
 <div class="stage-list">
 <strong>The worked sequence</strong>
@@ -128,12 +126,10 @@ d_G(i,j)
 <p>The path must follow actual network arcs. Two lines that cross geometrically are not connected
 unless they share a vertex after <code>vertex_digits</code> canonicalisation.</p>
 
-
 <figure class="tutorial-figure">
   <img src="assets/tutorial/02_network_distance.svg" alt="Two observations on different network arms with a network route and a shorter straight-line shortcut.">
   <figcaption>Figure 2. D and E are 2.35 units apart along the network. Their Euclidean shortcut is not used by DBSCAN.</figcaption>
 </figure>
-
 
 <h2 id="2-epsilon-neighbourhoods">2. Build ε-neighbourhoods in network space</h2>
 
@@ -160,12 +156,10 @@ N_\varepsilon(i)
 The contested position I sees only itself plus one core position from each dense component,
 for total neighbourhood weight 3; it is therefore not core.</p>
 
-
 <figure class="tutorial-figure">
   <img src="assets/tutorial/03_epsilon_neighborhoods.svg" alt="One core and one non-core epsilon neighborhood shown as network paths.">
   <figcaption>Figure 3. ε-neighbourhoods bend through the network; they are not Euclidean discs.</figcaption>
 </figure>
-
 
 <h2 id="3-core-border-and-noise">3. Core, border, and noise are intrinsic</h2>
 
@@ -187,12 +181,10 @@ for total neighbourhood weight 3; it is therefore not core.</p>
 <p>A non-core position with no core neighbour is noise. In the worked example, A–H are core,
 I is border, and J is noise.</p>
 
-
 <figure class="tutorial-figure">
   <img src="assets/tutorial/04_core_border_noise.svg" alt="Core positions, one intrinsic border position, and one noise position on the network.">
   <figcaption>Figure 4. Border status is a property of the ε geometry and does not depend on the later assignment policy.</figcaption>
 </figure>
-
 
 <h2 id="4-core-components">4. Core connectivity defines the clusters</h2>
 
@@ -216,12 +208,10 @@ d_G(i,j)\le\varepsilon.
 <p>The connected components of this graph are the invariant DBSCAN core clusters.
 Border points do not connect two otherwise separate core components.</p>
 
-
 <figure class="tutorial-figure">
   <img src="assets/tutorial/05_core_components.svg" alt="Two disconnected core epsilon components with the contested border point outside the core graph.">
   <figcaption>Figure 5. The contested border point touches both components but cannot merge them because it is not core.</figcaption>
 </figure>
-
 
 <div class="admonition">
   <strong>Important invariant.</strong>
@@ -241,12 +231,10 @@ network distance <strong>1.30</strong>; its nearest upper-cluster core is E at
 is assigned when cluster expansion first reaches it. In this worked ordering, I joins the left
 cluster.</p>
 
-
 <figure class="tutorial-figure">
   <img src="assets/tutorial/06_policy_expansion.svg" alt="Standard expansion assigns the contested border point to the left cluster.">
   <figcaption>Figure 6. Standard DBSCAN expansion assigns I to the first expanding core component that claims it.</figcaption>
 </figure>
-
 
 <h3 id="nearest-core-policy"><code>nearest_core</code>: nearest core cluster</h3>
 
@@ -265,24 +253,20 @@ d_G(i,j).
 <p>An exact distance tie goes to the smaller deterministic core-cluster label.
 Here E is closer than D, so I moves to the upper cluster.</p>
 
-
 <figure class="tutorial-figure">
   <img src="assets/tutorial/07_policy_nearest_core.svg" alt="Nearest-core assignment sends the contested border point to the upper cluster.">
   <figcaption>Figure 7. I joins the upper cluster because 1.25 &lt; 1.30.</figcaption>
 </figure>
-
 
 <h3 id="core-only-policy"><code>core_only</code>: DBSCAN*</h3>
 
 <p>Leave every border point unassigned. The intrinsic field <code>is_border</code> remains true, but
 the final label is noise.</p>
 
-
 <figure class="tutorial-figure">
   <img src="assets/tutorial/08_policy_core_only.svg" alt="Core-only policy leaves the contested border point as noise.">
   <figcaption>Figure 8. Under DBSCAN*, only core connected components receive cluster labels.</figcaption>
 </figure>
-
 
 <table class="worked-values">
 <thead>
@@ -307,12 +291,10 @@ d_G(i,j) \le \varepsilon.
 \]
 </div>
 
-
 <figure class="tutorial-figure">
   <img src="assets/tutorial/09_sparse_epsilon_graph.svg" alt="The complete sparse epsilon graph drawn over the worked network.">
   <figcaption>Figure 9. Only network pairs inside ε are materialised. Unlike net-hdbscan's max_distance, DBSCAN ε is both the model radius and the exact search bound.</figcaption>
 </figure>
-
 
 <p>This distinction matters: changing <code>eps</code> changes the DBSCAN model itself.
 It is not an adaptive computational horizon.</p>
@@ -340,12 +322,10 @@ M_\varepsilon(i) \ge \texttt{min_samples}.
 \]
 </div>
 
-
 <figure class="tutorial-figure">
   <img src="assets/tutorial/10_weighted_duplicates.svg" alt="Four colocated observations compressed into one snapped position with weight four.">
   <figcaption>Figure 10. Duplicate compression preserves ordinary DBSCAN min_samples semantics without materialising zero-distance duplicate pairs.</figcaption>
 </figure>
-
 
 <h2 id="from-math-to-the-package">From the derivation to the package</h2>
 

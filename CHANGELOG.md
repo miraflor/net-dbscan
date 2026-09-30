@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.5.0 — 2026-09-30
+
+### Changed
+
+- Breaking: remove study-area boundary filtering from the CLI and Python/file APIs. `net-dbscan` now clusters every supplied point; geographic eligibility filtering belongs upstream.
+- Add a visual algorithm guide covering network distance, ε-neighbourhoods, intrinsic core/border/noise status, core connectivity, the three border policies, sparse shortest-path search, and weighted duplicate positions.
+- Standardize the GitHub Pages site under `docs/`.
+- Keep the DBSCAN model, grouped execution, deterministic Shapely/SciPy network engine, sparse-neighbour safeguards, border policies, diagnostics, and output structure otherwise unchanged.
+
 ## 0.4.0
 
 ### Changed
