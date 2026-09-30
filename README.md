@@ -232,6 +232,59 @@ Grouped output filenames are preflighted case-insensitively so values such as `A
 
 `net-dbscan` does not download networks, repair uncertain topology, infer intersections that are absent from the source geometry, choose the scientifically appropriate `eps`, or construct service/Voronoi territories.
 
+## Provenance
+
+`net-dbscan` implements published methods. It does not propose a new clustering algorithm. The clustering model is DBSCAN (Ester et al., 1996). The distance is the shortest-path length between positions on a network, as in earlier network-constrained density clustering (Yiu and Mamoulis, 2004; Wang et al., 2019). The DBSCAN step itself is scikit-learn's `DBSCAN` (Pedregosa et al., 2011), called with `metric="precomputed"` on the sparse network-distance graph and with `sample_weight` for co-located observations.
+
+DBSCAN does not require Euclidean distance. The generalization by the original authors allows any symmetric predicate to define a neighbourhood (Ester et al., 1997; Sander et al., 1998). Shortest-path distance on the undirected network used by this package is symmetric, so the network ε-neighbourhood is such a predicate.
+
+### Source of each step
+
+| Step in `net-dbscan` | Published source or earlier implementation |
+|---|---|
+| Observations lie on network edges, and the distance is the shortest-path length along the network | Yiu and Mamoulis (2004) cluster objects that lie on the edges of a weighted spatial network, using shortest-path distance. |
+| Each observation is snapped to the nearest point of the nearest arc | NS-DBSCAN moves each point to its nearest road segment and splits the segment at that location (Wang et al., 2019). An earlier public Python example attaches each point to its nearest network node instead (Boeing, 2018). |
+| ε-neighbourhoods come from bounded shortest-path searches, without an all-pairs matrix | NS-DBSCAN finds ε-neighbours by expanding shortest paths from each point until the radius is reached (Wang et al., 2019). Shortest paths: Dijkstra (1959), computed with SciPy (Virtanen et al., 2020). |
+| Core positions, clusters as connected components of core positions, and noise | DBSCAN (Ester et al., 1996), computed by scikit-learn `DBSCAN` with `metric="precomputed"`. |
+| Co-located observations are compressed into one position with an integer weight | scikit-learn `DBSCAN` accepts `sample_weight`; a sample whose weight reaches `min_samples` is a core sample by itself. Core status is therefore the same as when each observation is repeated. |
+| `border_policy="expansion"` | The original DBSCAN algorithm gives a border point that several clusters can reach to the cluster that reaches it first (Ester et al., 1996). In this package, scikit-learn's expansion order decides which cluster is first. |
+| `border_policy="core_only"` | DBSCAN*, which leaves border points as noise (Campello et al., 2013). |
+| `border_policy="nearest_core"` | Assigning an ambiguous border point to the cluster of its closest core point is a described way to resolve the ambiguity (Kapp-Joswig and Keller, 2022). Tran et al. (2013) revised DBSCAN so that border assignment does not depend on processing order. The rule for exact ties (the smaller cluster label) is a convention of this package. |
+
+### What is specific to this package
+
+The package-specific parts are engineering and conventions: canonical vertex and arc identity, deterministic tie-breaking in snapping, batching and memory limits in the neighbour search, validation of sparse distance graphs, grouped execution, and the diagnostic fields `is_border`, `n_candidate_clusters` and `contested_share`. None of them defines a new clustering model. Under every border policy, core status and the connected components of core positions are those of DBSCAN.
+
+A different method has a similar name. NET-DBSCAN (Stefanakis, 2007) clusters the nodes of a linear network whose edges may be temporarily inaccessible. `net-dbscan` clusters point observations at any location along the edges of a fixed network, and it is not an implementation of NET-DBSCAN. Both methods extend DBSCAN to networks.
+
+## References
+
+Boeing, G. (2018, April). *Network-based spatial clustering* [Blog post]. https://geoffboeing.com/2018/04/network-based-spatial-clustering/
+
+Campello, R. J. G. B., Moulavi, D., & Sander, J. (2013). Density-based clustering based on hierarchical density estimates. In *Advances in Knowledge Discovery and Data Mining (PAKDD 2013)*, Lecture Notes in Computer Science 7819, 160–172. Springer. https://doi.org/10.1007/978-3-642-37456-2_14
+
+Dijkstra, E. W. (1959). A note on two problems in connexion with graphs. *Numerische Mathematik*, 1, 269–271.
+
+Ester, M., Kriegel, H.-P., Sander, J., & Xu, X. (1996). A density-based algorithm for discovering clusters in large spatial databases with noise. In *Proceedings of the Second International Conference on Knowledge Discovery and Data Mining (KDD-96)*, 226–231. AAAI Press.
+
+Ester, M., Kriegel, H.-P., Sander, J., & Xu, X. (1997). Density-connected sets and their application for trend detection in spatial databases. In *Proceedings of the Third International Conference on Knowledge Discovery and Data Mining (KDD-97)*, 10–15. AAAI Press.
+
+Kapp-Joswig, J.-O. F., & Keller, B. G. (2022). *Clustering — basic concepts and methods*. arXiv:2212.01248. https://doi.org/10.48550/arXiv.2212.01248
+
+Pedregosa, F., Varoquaux, G., Gramfort, A., et al. (2011). Scikit-learn: Machine learning in Python. *Journal of Machine Learning Research*, 12, 2825–2830.
+
+Sander, J., Ester, M., Kriegel, H.-P., & Xu, X. (1998). Density-based clustering in spatial databases: The algorithm GDBSCAN and its applications. *Data Mining and Knowledge Discovery*, 2(2), 169–194. https://doi.org/10.1023/A:1009745219419
+
+Stefanakis, E. (2007). NET-DBSCAN: Clustering the nodes of a dynamic linear network. *International Journal of Geographical Information Science*. https://doi.org/10.1080/13658810601034226
+
+Tran, T. N., Drab, K., & Daszykowski, M. (2013). Revised DBSCAN algorithm to cluster data with dense adjacent clusters. *Chemometrics and Intelligent Laboratory Systems*. https://doi.org/10.1016/j.chemolab.2012.11.006
+
+Virtanen, P., Gommers, R., Oliphant, T. E., et al. (2020). SciPy 1.0: Fundamental algorithms for scientific computing in Python. *Nature Methods*, 17, 261–272. https://doi.org/10.1038/s41592-019-0686-2
+
+Wang, T., Ren, C., Luo, Y., & Tian, J. (2019). NS-DBSCAN: A density-based clustering algorithm in network space. *ISPRS International Journal of Geo-Information*, 8(5), 218. https://doi.org/10.3390/ijgi8050218
+
+Yiu, M. L., & Mamoulis, N. (2004). Clustering objects on a spatial network. In *Proceedings of the 2004 ACM SIGMOD International Conference on Management of Data*, 443–454. https://doi.org/10.1145/1007568.1007619
+
 ## License
 
 MIT.
